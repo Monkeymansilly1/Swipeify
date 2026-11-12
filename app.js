@@ -7,7 +7,7 @@ const SCOPES = [
   'user-read-private', 'user-read-email', 'user-top-read',
   'user-read-recently-played', 'streaming',
   'user-read-playback-state', 'user-modify-playback-state',
-  'user-library-modify'
+  'user-library-modify', 'playlist-read-private', 'playlist-read-collaborative'
 ];
 const API = 'https://api.spotify.com/v1';
 const AUTH_BASE = 'https://accounts.spotify.com';
@@ -28,11 +28,30 @@ const state = {
   decisions: Array.isArray(saved.decisions) ? saved.decisions : [],
   bookmarks: Array.isArray(saved.bookmarks) ? saved.bookmarks : [],
   queue: [], current: null, undo: null, fetching: null, swiping: false,
-  topArtists: [], knownTracks: new Set(), user: null, player: null, deviceId: null,
+  topArtists: [], knownTracks: new Set(), playlistTrackIds: new Set(),
+  playlistTrackKeys: new Set(), playlistScan: null, user: null, player: null, deviceId: null,
   playback: { position: 0, duration: 0, updatedAt: 0, paused: true },
   started: false, autoPlayNext: false, pendingPlay: false, endHandled: false, loading: false, refreshPromise: null,
   searchRound: 0, toastTimer: null, genreHint: ''
 };
+function hasPlaylistScopes() {
+  const allowed = new Set((state.tokens?.scope || '').split(/\s+/));
+  return allowed.has('playlist-read-private') && allowed.has('playlist-read-collaborative');
+}
+function setPlaylistStatus(message) {
+  const el = $('playlistFilterStatus');
+  if (el) { el.textContent = message; el.classList.remove('hidden'); }
+  const loading = $('loadingText');
+  if (loading && !$('loadingState').classList.contains('hidden')) loading.textContent = message;
+}
+function normalizeSongKey(name, artist) {
+  // A different album edition can have a different Spotify ID for the same recording.
+  // Avoid duplicate titles by the same primary artist; keep remixes distinct.
+  const clean = (value) => String(value || '').normalize('NFKC')
+    .toLowerCase().replace(/\s*[-–—]\s*(?:\d{4}\s*)?remaster(?:ed)?(?:\s*\d{4})?\s*$/i, '')
+    .replace(/[’‘]/g, "'").replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  return clean(name) + '|' + clean(artist);
+}
 function savePreferences() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
     genre: state.genre, adventure: state.adventure,
@@ -84,7 +103,9 @@ async function exchangeToken(data) {
   state.tokens = {
     access_token: payload.access_token,
     refresh_token: payload.refresh_token || (state.tokens && state.tokens.refresh_token),
-    expires_at: Date.now() + (payload.expires_in || 3600) * 1000
+    expires_at: Date.now() + (payload.expires_in || 3600) * 1000,
+    scope: payload.scope || (data.grant_type === 'authorization_code'
+      ? SCOPES.join(' ') : (state.tokens?.scope || ''))
   };
   sessionStorage.setItem(TOKEN_KEY, JSON.stringify(state.tokens));
   return state.tokens.access_token;
@@ -197,6 +218,8 @@ function normalizeTrack(track, source) {
     id: track.id, uri: track.uri, name: track.name || 'Unknown song',
     artist: track.artists.map((a) => a.name).filter(Boolean).join(', ') || 'Unknown artist',
     artistIds: track.artists.map((a) => a.id).filter(Boolean),
+    primaryArtist: track.artists[0]?.name || '',
+    linkedId: track.linked_from?.id || null,
     album: track.album.name || 'Single',
     cover: (track.album.images || [])[0]?.url || DEFAULT_COVER,
     duration: track.duration_ms || 0,
@@ -214,7 +237,81 @@ function scoreTrack(track) {
     (likedBefore ? 21 * familiarWeight : 0) + (track.source === state.genre ? 20 : 0);
 }
 function seenIds() {
-  return new Set(state.decisions.map((d) => d.id).concat(state.queue.map((t) => t.id), state.current ? [state.current.id] : [], Array.from(state.knownTracks)));
+  return new Set(state.decisions.map((d) => d.id)
+    .concat(state.queue.map((t) => t.id), state.current ? [state.current.id] : [],
+      Array.from(state.knownTracks), Array.from(state.playlistTrackIds)));
+}
+function isAlreadyOwned(track) {
+  return state.playlistTrackIds.has(track.id) ||
+    (track.linkedId && state.playlistTrackIds.has(track.linkedId)) ||
+    state.playlistTrackKeys.has(normalizeSongKey(track.name, track.primaryArtist));
+}
+function scanPlaylistItem(entry) {
+  const track = entry?.item || entry?.track;
+  if (!track || track.type !== 'track') return;
+  if (track.id) state.playlistTrackIds.add(track.id);
+  if (track.linked_from?.id) state.playlistTrackIds.add(track.linked_from.id);
+  if (track.name && track.artists?.length) {
+    state.playlistTrackKeys.add(normalizeSongKey(track.name, track.artists[0]?.name));
+  }
+}
+async function readOnePlaylist(playlist) {
+  const perPage = 50; let offset = 0;
+  for (;;) {
+    const page = await spotify('/playlists/' + encodeURIComponent(playlist.id) +
+      '/items?limit=' + perPage + '&offset=' + offset);
+    const items = Array.isArray(page?.items) ? page.items : [];
+    for (const entry of items) scanPlaylistItem(entry);
+    offset += items.length;
+    if (!items.length || !page.next || (Number.isFinite(page.total) && offset >= page.total)) break;
+  }
+}
+async function loadPlaylistExclusions() {
+  // Spotify's 2026 Development Mode API can only read playlist items for
+  // playlists the user owns or collaborates on, not followed-only playlists.
+  state.playlistTrackIds = new Set();
+  state.playlistTrackKeys = new Set();
+  setPlaylistStatus('Checking your playlists before suggesting songs…');
+  const playlists = [];
+  for (let offset = 0;;) {
+    const page = await spotify('/me/playlists?limit=50&offset=' + offset);
+    const entries = Array.isArray(page?.items) ? page.items : [];
+    playlists.push(...entries);
+    offset += entries.length;
+    if (!entries.length || !page.next || (Number.isFinite(page.total) && offset >= page.total)) break;
+  }
+  const unique = [...new Map(playlists.filter((p) => p?.id).map((p) => [p.id, p])).values()];
+  const readable = unique.filter((p) => p.owner?.id === state.user?.id || p.collaborative === true);
+  const followedOnly = unique.length - readable.length;
+  let scanned = 0;
+  const failures = [];
+  let index = 0;
+  async function worker() {
+    while (index < readable.length) {
+      const playlist = readable[index++];
+      try { await readOnePlaylist(playlist); }
+      catch (error) { failures.push(playlist.name + ': ' + error.message); }
+      scanned++;
+      setPlaylistStatus('Checking playlists ' + scanned + '/' + readable.length + '…');
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(2, readable.length) }, worker));
+  if (failures.length) {
+    throw new Error('Could not fully scan your playlists (' + failures[0] +
+      '). Retry before discovering songs to avoid repeats.');
+  }
+  state.playlistScan = {
+    scanned, followedOnly,
+    songs: state.playlistTrackIds.size, completeForReadable: true
+  };
+  let description = '✓ Excluding ' + state.playlistTrackIds.size +
+    ' existing songs from ' + scanned + ' playlists';
+  if (followedOnly) description += ' · ' + followedOnly +
+    ' followed-only playlist(s) cannot be checked by Spotify';
+  if (!scanned) description = followedOnly
+    ? 'Spotify cannot read tracks from followed-only playlists; only owned/collaborative playlists can be filtered.'
+    : 'No playlists found. New discoveries will still exclude recent and top tracks.';
+  setPlaylistStatus(description);
 }
 function chooseSearches() {
   const genres = [state.genre];
@@ -264,9 +361,12 @@ async function fetchCandidates() {
     const tracks = results.flatMap((r) => r.status === 'fulfilled' ? r.value : []);
     if (results.every((r) => r.status === 'rejected')) throw results[0].reason;
     const excluded = seenIds();
+    const candidateKeys = new Set();
     const candidates = tracks.filter((track) => {
-      if (excluded.has(track.id)) return false;
+      const key = normalizeSongKey(track.name, track.primaryArtist);
+      if (excluded.has(track.id) || isAlreadyOwned(track) || candidateKeys.has(key)) return false;
       excluded.add(track.id);
+      candidateKeys.add(key);
       return true;
     });
     candidates.forEach((track) => { track.score = scoreTrack(track); });
@@ -329,12 +429,9 @@ async function advance(autoplay) {
     showLoading('Looking for more ' + state.genre + ' tracks…');
     try {
       await fetchCandidates();
-      if (!state.queue.length) {
-        // Repeat once from the start if the current search window has been exhausted.
-        state.searchRound = 0;
-        await fetchCandidates();
-      }
-      if (!state.queue.length) throw new Error('No new tracks found for this sound. Try another genre or reset your discovery history.');
+      // Search other offsets rather than immediately recycling the same candidates.
+      for (let tries = 0; tries < 3 && !state.queue.length; tries++) await fetchCandidates();
+      if (!state.queue.length) throw new Error('No unseen tracks found for this sound. Try another genre or higher discovery intensity.');
     } catch (error) { showError('No songs available', error.message); return; }
   }
   showDiscovery();
@@ -591,6 +688,13 @@ async function startApp() {
   await handleOAuthCallback();
   if (state.authError) showToast(state.authError);
   if (!state.tokens) return;
+  if (!hasPlaylistScopes()) {
+    $('loginButton').textContent = 'Reconnect Spotify to exclude playlist songs';
+    $('loginGate').querySelector('p').textContent =
+      'Swipeify needs playlist-reading permission to avoid recommending songs you already have. Reconnect once to allow this.';
+    showToast('Reconnect Spotify once to approve the new playlist permissions.');
+    return;
+  }
   $('loginGate').classList.add('hidden');
   $('connectionIndicator').classList.add('connected');
   $('connectionText').textContent = 'Spotify connected';
@@ -602,6 +706,7 @@ async function startApp() {
     $('avatarButton').title = user.display_name || user.id || 'Spotify profile';
     await loadTaste();
     setGenreUI(); savePreferences();
+    await loadPlaylistExclusions();
     await advance(false);
     // Spotify SDK is loaded after the discovery card so errors do not block finding tracks.
     connectPlayer().catch((error) => { $('playerBar').classList.remove('hidden'); playerMessage(error.message); });
