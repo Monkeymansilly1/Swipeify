@@ -250,8 +250,12 @@ async function fetchCandidates() {
     const tracks = results.flatMap((r) => r.status === 'fulfilled' ? r.value : []);
     if (results.every((r) => r.status === 'rejected')) throw results[0].reason;
     const excluded = seenIds();
-    const candidates = tracks.filter((track) => !excluded.has(track.id));
-    candidates.forEach((track) => { track.score = scoreTrack(track); excluded.add(track.id); });
+    const candidates = tracks.filter((track) => {
+      if (excluded.has(track.id)) return false;
+      excluded.add(track.id);
+      return true;
+    });
+    candidates.forEach((track) => { track.score = scoreTrack(track); });
     candidates.sort((a,b) => b.score - a.score);
     state.queue.push.apply(state.queue, candidates);
     return candidates.length;
@@ -312,7 +316,7 @@ async function advance(autoplay) {
 function playerMessage(message) { $('playerMessage').textContent = message || ''; }
 async function saveToSpotify(track) {
   try {
-    await spotify('/me/library', { method: 'PUT', body: JSON.stringify({ uris: [track.uri] }) });
+    await spotify('/me/library?uris=' + encodeURIComponent(track.uri), { method: 'PUT' });
     showToast('♥ Saved ' + track.name + ' to your Spotify Liked Songs');
   } catch (error) {
     showToast('Saved in Swipeify, but Spotify could not save it: ' + error.message);
@@ -329,6 +333,8 @@ function recordDecision(track, action) {
 async function swipe(action) {
   if (!state.current || state.swiping) return;
   state.swiping = true;
+  // Gesture-originated activation helps mobile browsers permit continued playback.
+  if (state.player && typeof state.player.activateElement === 'function') state.player.activateElement();
   const track = state.current;
   state.undo = { track, action };
   const card = $('trackCard');
@@ -383,10 +389,14 @@ async function connectPlayer() {
     if (!playback || !state.current) return;
     const active = playback.track_window && playback.track_window.current_track;
     if (active && active.id !== state.current.id) return;
+    const previous = state.playback;
+    const ended = playback.paused && playback.position === 0 && previous.duration > 10000 &&
+      previous.position >= previous.duration - 1500 && !state.endHandled && state.started;
     state.playback = {
       position: playback.position || 0, duration: playback.duration || state.current.duration,
       updatedAt: performance.now(), paused: playback.paused
     };
+    if (ended) { state.endHandled = true; void swipe('auto'); }
     $('playPause').textContent = playback.paused ? '▶' : '❚❚';
     $('playPause').setAttribute('aria-label', playback.paused ? 'Play song' : 'Pause song');
     updateProgress();
