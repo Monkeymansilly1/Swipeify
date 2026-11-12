@@ -376,7 +376,7 @@ const GENRE_ARTISTS = Object.freeze({
 });
 function artistKey(name) {
   return String(name || '').normalize('NFKC').toLowerCase()
-    .replace(/&/g, 'and').replace(/[’']/g, '').replace(/[^\\p{L}\\p{N}]+/gu, '');
+    .replace(/&/g, 'and').replace(/[’']/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
 }
 function artistsForGenre(genre) {
   return GENRE_ARTISTS[genre] || [];
