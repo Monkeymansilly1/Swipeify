@@ -10,13 +10,14 @@ A Spotify Premium discovery website using plain HTML, CSS, and JavaScript. No da
 - Spotify sign-in with Authorization Code + PKCE.
 - Swipe cards using touch, mouse or keyboard, plus clear ✕ / ♥ / ♧ / ★ buttons.
 - Swipe right or tap ♥ to save to Spotify Liked Songs.
-- Genres and discovery intensity help steer the next track; search candidates also use top artists and available listening history.
+- **Strict genre matching:** picking Drum & Bass no longer pulls unrelated favourite artists into the feed. Swipeify verifies returned artists against a curated genre-specific roster before showing a track.
+- Genres and discovery intensity tune familiarity **within** the selected genre. Top artists and recent listening guide familiarity only where they fit your genre.
 - **Avoid duplicate suggestions from your playlists:** scan accessible playlists you own or collaborate on, including long playlists, and exclude songs by track ID or matching title + primary artist.
 - Play/pause, seek and next-song controls.
 - Local saved-for-later list, previous-track button and swipe counts.
 - Genuine Spotify track metadata and artwork, no fabricated example songs.
 
-This is an experimental **custom recommendation engine** using Spotify Search, not Spotify's discontinued Recommendations API. Artist genre fields may be restricted, so the user-selected genre is always available. The app does not train AI on Spotify content.
+This is an experimental **custom recommendation engine** using Spotify Search, not Spotify's discontinued Recommendations API. Spotify Search can return unrelated artist matches, so results are verified rather than trusting search queries alone. Artist-based genre classification is a guardrail, not definitive track-level genre analysis; occasional crossover releases may still exist. Artist genre fields may be restricted, so the user-selected genre is always available. The app does not train AI on Spotify content.
 
 ## Put the app online with GitHub Pages
 

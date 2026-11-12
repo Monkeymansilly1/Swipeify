@@ -32,7 +32,7 @@ const state = {
   playlistTrackKeys: new Set(), playlistScan: null, user: null, player: null, deviceId: null,
   playback: { position: 0, duration: 0, updatedAt: 0, paused: true },
   started: false, autoPlayNext: false, pendingPlay: false, endHandled: false, loading: false, refreshPromise: null,
-  searchRound: 0, toastTimer: null, genreHint: ''
+  searchRound: 0, genreGeneration: 0, toastTimer: null, genreHint: ''
 };
 function hasPlaylistScopes() {
   const allowed = new Set((state.tokens?.scope || '').split(/\s+/));
@@ -218,6 +218,7 @@ function normalizeTrack(track, source) {
     id: track.id, uri: track.uri, name: track.name || 'Unknown song',
     artist: track.artists.map((a) => a.name).filter(Boolean).join(', ') || 'Unknown artist',
     artistIds: track.artists.map((a) => a.id).filter(Boolean),
+    artistNames: track.artists.map((a) => a.name).filter(Boolean),
     primaryArtist: track.artists[0]?.name || '',
     linkedId: track.linked_from?.id || null,
     album: track.album.name || 'Single',
@@ -313,68 +314,149 @@ async function loadPlaylistExclusions() {
     : 'No playlists found. New discoveries will still exclude recent and top tracks.';
   setPlaylistStatus(description);
 }
-function chooseSearches() {
-  const genres = [state.genre];
-  const genreCandidates = state.topArtists.flatMap((a) => Array.isArray(a.genres) ? a.genres : []).filter((g) => g.length < 32);
-  const randomGenres = genreCandidates.sort(() => Math.random() - .5).slice(0, state.adventure > 60 ? 2 : 1);
-  const alternatives = state.adventure > 65 ? ['indie', 'house', 'garage', 'hip hop', 'pop', 'grime', 'drum and bass'] : [];
-  genres.push.apply(genres, randomGenres);
-  if (alternatives.length && Math.random() > .3) genres.push(alternatives[Math.floor(Math.random() * alternatives.length)]);
-  return [...new Set(genres)].slice(0, 3);
+// Artist rosters act as a genre guardrail. Spotify's search results can include
+// unrelated artists, even for artist:"..." queries, and track objects no longer
+// reliably expose genre fields in Development Mode. Discovery intensity must
+// change *familiarity within a genre*, never switch to a different genre.
+const GENRE_ARTISTS = Object.freeze({
+  'drum and bass': [
+    'Bou','Hedex','Kanine','K Motionz','Mozey','Sota','Sub Focus','Dimension',
+    'Culture Shock','1991','Metrik','Grafix','Delta Heavy','Andy C','A.M.C',
+    'DJ Hazard','Serum','Turno','Simula','Basstripper','Disrupta','Amplify',
+    'T95','Voltage','Friction','Camo & Krooked','Hybrid Minds','Pola & Bryson',
+    'High Contrast','Wilkinson','Netsky','Chase & Status','Pendulum',
+    'Macky Gee','Nia Archives','Alcemist','Vibe Chemistry','Break','Enei',
+    'S.P.Y','Emperor','Koven','Shy FX','Technimatic','Unglued','Rockwell',
+    'Benny L','Phibes','Dominator','Teddy Killerz','Annix','Nu:Tone','BCee',
+    'Dillinja','Kings Of The Rollers','DJ Marky'
+  ],
+  'grime': [
+    'Skepta','JME','D Double E','P Money','Ghetts','Kano','Wiley',
+    'Dizzee Rascal','Novelist','Jammer','Frisco','Chip','Stormzy','AJ Tracey',
+    'Manga Saint Hilare','Flowdan','Jaykae','Capo Lee','Riko Dan',
+    'President T','Footsie','Mez','Scrufizzer','Merky ACE','Logan','Big Zuu'
+  ],
+  'uk drill': [
+    'Headie One','Digga D','Unknown T','K-Trap','67','410','OFB',
+    'Abra Cadabra','Loski','Kwengface','PS Hitsquad','M24','Tion Wayne',
+    'Russ Millions','Nito NB','Suspect','Clavish','Central Cee','2Smokeyy',
+    'AM','Skengdo','LD','CB','DigDat'
+  ],
+  'hip hop': [
+    'Kendrick Lamar','J. Cole','Travis Scott','Tyler, The Creator',
+    'JID','Nas','Denzel Curry','A$AP Rocky','MF DOOM','Joey Bada$$',
+    'Baby Keem','Drake','21 Savage','Future','Metro Boomin','Don Toliver',
+    'Vince Staples','Freddie Gibbs','Little Simz','Mac Miller','Saba',
+    'Earl Sweatshirt','Schoolboy Q','Kid Cudi'
+  ],
+  'house': [
+    'Disclosure','MK','Dom Dolla','Chris Lake','John Summit','FISHER',
+    'Sonny Fodera','Gorgon City','James Hype','CamelPhat','Peggy Gou',
+    'Fred again..','D.O.D','Claptone','Biscits','Duke Dumont','Low Steppa',
+    'ACRAZE','Honey Dijon','Dennis Ferrer','Chris Stussy','Eats Everything'
+  ],
+  'pop': [
+    'Dua Lipa','Charli xcx','Billie Eilish','Olivia Rodrigo','Sabrina Carpenter',
+    'The Weeknd','Taylor Swift','Ariana Grande','Harry Styles','Lorde',
+    'Rina Sawayama','Chappell Roan','Miley Cyrus','Caroline Polachek',
+    'Troye Sivan','Lady Gaga','Tate McRae','PinkPantheress','RAYE'
+  ],
+  'indie': [
+    'Arctic Monkeys','The Strokes','Tame Impala','The 1975','Fontaines D.C.',
+    'Wet Leg','Inhaler','Wolf Alice','The Last Dinner Party','Gorillaz',
+    'Foals','Two Door Cinema Club','The Wombats','Bloc Party','The Kooks',
+    'The Smiths','Pulp','The Libertines','Cage The Elephant','Vampire Weekend'
+  ],
+  'garage': [
+    'Sammy Virji','Interplanetary Criminal','Conducta','Oppidan','MPH',
+    'Main Phase','DJ EZ','DJ Q','MJ Cole','Artful Dodger','Sharda',
+    'Soul Mass Transit System','Silva Bumpa','Bakey','Y U QT','Champion',
+    'salute','Eliza Rose','Todd Edwards','M-Dubs','Tuff Jam','Zed Bias'
+  ]
+});
+function artistKey(name) {
+  return String(name || '').normalize('NFKC').toLowerCase()
+    .replace(/&/g, 'and').replace(/[’']/g, '').replace(/[^\p{L}\p{N}]+/gu, '');
 }
-async function searchTracks(genre, offset) {
-  const quoted = genre.replace(/"/g, '');
-  const query = 'genre:"' + quoted + '"';
-  const params = new URLSearchParams({ q: query, type: 'track', limit: '10', offset: String(offset) });
-  let result = await spotify('/search?' + params.toString());
-  let tracks = result && result.tracks && result.tracks.items || [];
-  // Not all Spotify genres are valid search tags; fall back to a text search.
-  if (!tracks.length) {
-    params.set('q', quoted);
-    params.set('offset', '0');
-    result = await spotify('/search?' + params.toString());
-    tracks = result && result.tracks && result.tracks.items || [];
-  }
-  return tracks.map((t) => normalizeTrack(t, genre)).filter(Boolean);
+function artistsForGenre(genre) {
+  return GENRE_ARTISTS[genre] || [];
 }
-async function searchArtistSeed(artist, offset) {
+function matchesArtist(track, artist) {
+  const key = artistKey(artist);
+  return Array.isArray(track.artistNames) && track.artistNames.some((name) => artistKey(name) === key);
+}
+function matchesSelectedGenre(track, genre) {
+  return artistsForGenre(genre).some((artist) => matchesArtist(track, artist));
+}
+function curatedArtistsForRound(genre, round) {
+  const artists = artistsForGenre(genre);
+  if (!artists.length) return [];
+  const likedNames = state.topArtists.map((a) => artistKey(a.name))
+    .concat(state.decisions.filter((d) => ['like', 'super'].includes(d.action))
+      .map((d) => artistKey(d.artist)));
+  const favs = artists.filter((name) => likedNames.includes(artistKey(name)));
+  const seeds = [
+    artists[(round * 7 + 3) % artists.length],
+    artists[(round * 13 + Math.floor(round / artists.length) + 11) % artists.length]
+  ];
+  if (state.adventure < 55 && favs.length) seeds[0] = favs[round % favs.length];
+  return [...new Set(seeds)];
+}
+async function searchGenreTracks(genre, offset) {
   const params = new URLSearchParams({
-    q: 'artist:"' + artist.name.replace(/"/g, '') + '"',
+    q: 'genre:"' + genre.replace(/"/g, '') + '"',
     type: 'track', limit: '10', offset: String(offset)
   });
   const result = await spotify('/search?' + params.toString());
-  return ((result && result.tracks && result.tracks.items) || [])
-    .map((track) => normalizeTrack(track, 'your favourite artist ' + artist.name)).filter(Boolean);
+  return ((result?.tracks?.items) || [])
+    .map((track) => normalizeTrack(track, genre))
+    .filter((track) => track && matchesSelectedGenre(track, genre));
+}
+async function searchArtistTracks(artist, genre, offset) {
+  const params = new URLSearchParams({
+    q: 'artist:"' + artist.replace(/"/g, '') + '"',
+    type: 'track', limit: '10', offset: String(offset)
+  });
+  const result = await spotify('/search?' + params.toString());
+  return ((result?.tracks?.items) || [])
+    .map((track) => normalizeTrack(track, genre))
+    // Spotify Search may return partial matches: verify the credited artist.
+    .filter((track) => track && matchesArtist(track, artist));
 }
 async function fetchCandidates() {
   if (state.fetching) return state.fetching;
-  state.fetching = (async () => {
-    const genres = chooseSearches();
-    const offsets = [0, 10, 20, 30, 40, 50, 60];
-    const offset = offsets[state.searchRound++ % offsets.length];
-    const requests = genres.map((g, i) => searchTracks(g, Math.max(0, offset + i * 10)));
-    if (state.adventure < 85 && state.topArtists.length) {
-      const artist = state.topArtists[state.searchRound % Math.min(state.topArtists.length, 15)];
-      if (artist && artist.name) requests.push(searchArtistSeed(artist, offset));
-    }
+  const genre = state.genre, generation = state.genreGeneration;
+  const round = state.searchRound++;
+  const offsets = [0, 10, 20, 30, 40, 50, 60, 70, 80];
+  const offset = offsets[round % offsets.length];
+  const inFlight = (async () => {
+    const seeds = curatedArtistsForRound(genre, round);
+    const requests = [
+      searchGenreTracks(genre, offset),
+      ...seeds.map((artist, i) => searchArtistTracks(artist, genre, offsets[(round + i * 3) % offsets.length]))
+    ];
     const results = await Promise.allSettled(requests);
+    if (results.every((result) => result.status === 'rejected')) throw results[0].reason;
+    // Discard stale search responses when the listener changes genre.
+    if (generation !== state.genreGeneration || genre !== state.genre) return 0;
     const tracks = results.flatMap((r) => r.status === 'fulfilled' ? r.value : []);
-    if (results.every((r) => r.status === 'rejected')) throw results[0].reason;
     const excluded = seenIds();
-    const candidateKeys = new Set();
+    const candidateKeys = new Set(state.queue.map((t) => normalizeSongKey(t.name, t.primaryArtist)));
     const candidates = tracks.filter((track) => {
       const key = normalizeSongKey(track.name, track.primaryArtist);
-      if (excluded.has(track.id) || isAlreadyOwned(track) || candidateKeys.has(key)) return false;
+      if (!matchesSelectedGenre(track, genre) || excluded.has(track.id) ||
+          isAlreadyOwned(track) || candidateKeys.has(key)) return false;
       excluded.add(track.id);
       candidateKeys.add(key);
       return true;
     });
-    candidates.forEach((track) => { track.score = scoreTrack(track); });
-    candidates.sort((a,b) => b.score - a.score);
-    state.queue.push.apply(state.queue, candidates);
+    candidates.forEach((track) => { track.score = scoreTrack(track); track.genre = genre; });
+    candidates.sort((a, b) => b.score - a.score);
+    state.queue.push(...candidates);
     return candidates.length;
-  })().finally(() => { state.fetching = null; });
-  return state.fetching;
+  })().finally(() => { if (state.fetching === inFlight) state.fetching = null; });
+  state.fetching = inFlight;
+  return inFlight;
 }
 async function loadTaste() {
   const paths = ['/me/top/artists?time_range=medium_term&limit=30', '/me/top/tracks?time_range=medium_term&limit=50',
@@ -424,6 +506,7 @@ function renderTrack(track) {
   updateProgress();
 }
 async function advance(autoplay) {
+  const requestedGenre = state.genre;
   if (state.queue.length < 3 && !state.fetching) fetchCandidates().catch((e) => { $('feedNotice').textContent = e.message; });
   if (!state.queue.length) {
     showLoading('Looking for more ' + state.genre + ' tracks…');
@@ -431,9 +514,14 @@ async function advance(autoplay) {
       await fetchCandidates();
       // Search other offsets rather than immediately recycling the same candidates.
       for (let tries = 0; tries < 3 && !state.queue.length; tries++) await fetchCandidates();
-      if (!state.queue.length) throw new Error('No unseen tracks found for this sound. Try another genre or higher discovery intensity.');
-    } catch (error) { showError('No songs available', error.message); return; }
+      if (state.genre !== requestedGenre) return;
+      if (!state.queue.length) throw new Error('No more verified ' + requestedGenre + ' tracks found. Try another genre or reset your swipe history.');
+    } catch (error) {
+      if (state.genre === requestedGenre) showError('No songs available', error.message);
+      return;
+    }
   }
+  if (state.genre !== requestedGenre) return;
   showDiscovery();
   renderTrack(state.queue.shift());
   if (autoplay) {
@@ -502,7 +590,10 @@ async function undoSwipe() {
 }
 async function changeGenre(value) {
   if (state.genre === value) return;
-  state.genre = value; state.queue = []; state.searchRound = 0;
+  state.genre = value;
+  state.genreGeneration++;
+  state.fetching = null;
+  state.queue = []; state.searchRound = 0;
   savePreferences(); setGenreUI();
   if (state.tokens) await advance(state.autoPlayNext);
 }
