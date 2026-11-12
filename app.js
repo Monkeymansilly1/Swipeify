@@ -228,7 +228,7 @@ function chooseSearches() {
 async function searchTracks(genre, offset) {
   const quoted = genre.replace(/"/g, '');
   const query = 'genre:"' + quoted + '"';
-  const params = new URLSearchParams({ q: query, type: 'track', limit: '10', offset: String(offset), market: 'from_token' });
+  const params = new URLSearchParams({ q: query, type: 'track', limit: '10', offset: String(offset) });
   let result = await spotify('/search?' + params.toString());
   let tracks = result && result.tracks && result.tracks.items || [];
   // Not all Spotify genres are valid search tags; fall back to a text search.
@@ -240,13 +240,27 @@ async function searchTracks(genre, offset) {
   }
   return tracks.map((t) => normalizeTrack(t, genre)).filter(Boolean);
 }
+async function searchArtistSeed(artist, offset) {
+  const params = new URLSearchParams({
+    q: 'artist:"' + artist.name.replace(/"/g, '') + '"',
+    type: 'track', limit: '10', offset: String(offset)
+  });
+  const result = await spotify('/search?' + params.toString());
+  return ((result && result.tracks && result.tracks.items) || [])
+    .map((track) => normalizeTrack(track, 'your favourite artist ' + artist.name)).filter(Boolean);
+}
 async function fetchCandidates() {
   if (state.fetching) return state.fetching;
   state.fetching = (async () => {
     const genres = chooseSearches();
     const offsets = [0, 10, 20, 30, 40, 50, 60];
     const offset = offsets[state.searchRound++ % offsets.length];
-    const results = await Promise.allSettled(genres.map((g, i) => searchTracks(g, Math.max(0, offset + i * 10))));
+    const requests = genres.map((g, i) => searchTracks(g, Math.max(0, offset + i * 10)));
+    if (state.adventure < 85 && state.topArtists.length) {
+      const artist = state.topArtists[state.searchRound % Math.min(state.topArtists.length, 15)];
+      if (artist && artist.name) requests.push(searchArtistSeed(artist, offset));
+    }
+    const results = await Promise.allSettled(requests);
     const tracks = results.flatMap((r) => r.status === 'fulfilled' ? r.value : []);
     if (results.every((r) => r.status === 'rejected')) throw results[0].reason;
     const excluded = seenIds();
@@ -270,6 +284,13 @@ async function loadTaste() {
   state.topArtists = items(0);
   const known = items(1).concat(items(2).map((entry) => entry.track)).filter(Boolean);
   state.knownTracks = new Set(known.map((t) => t.id).filter(Boolean));
+  if (!state.topArtists.length) {
+    const artistMap = new Map();
+    for (const track of known) for (const artist of track.artists || []) {
+      if (artist.id && !artistMap.has(artist.id)) artistMap.set(artist.id, artist);
+    }
+    state.topArtists = Array.from(artistMap.values()).slice(0, 25);
+  }
   // Spotify may restrict optional genre fields; explicit genre choice stays available.
   const genreNames = state.topArtists.flatMap((a) => Array.isArray(a.genres) ? a.genres : []);
   if (!saved.genre && genreNames.length) {
