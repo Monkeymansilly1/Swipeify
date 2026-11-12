@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#080d11" />
+  <meta name="description" content="Swipeify — discover music that feels like you. Swipe right to save, left to skip." />
+  <title>Swipeify — Find your next favourite</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
+  <div class="app-shell">
+    <header class="site-header">
+      <a class="brand" href="./" aria-label="Swipeify home">
+        <span class="brand-mark" aria-hidden="true">♫</span>
+        <span>swipeify<span class="brand-dot">.</span></span>
+      </a>
+      <div class="header-right">
+        <span class="live-indicator" id="connectionIndicator"><span class="dot"></span><span id="connectionText">Not connected</span></span>
+        <button type="button" class="avatar" id="avatarButton" aria-label="Account" title="Your Spotify account">S</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <section class="side-intro">
+          <span class="eyebrow">THE DISCOVERY ENGINE</span>
+          <h1>Your next <em>obsession</em> is one swipe away.</h1>
+          <p>Real songs. Your taste. A little adventure.</p>
+        </section>
+
+        <div class="panel">
+          <div class="panel-heading"><span>YOUR VIBE</span><span class="heading-icon">✧</span></div>
+          <p class="help">Choose a sound to guide your recommendations.</p>
+          <div class="genre-list" id="genreList" role="group" aria-label="Preferred genres">
+            <button class="genre active" data-genre="drum and bass" aria-pressed="true">⚡ Drum & Bass</button>
+            <button class="genre" data-genre="grime" aria-pressed="false">🎤 Grime</button>
+            <button class="genre" data-genre="uk drill" aria-pressed="false">🔥 UK Drill</button>
+            <button class="genre" data-genre="hip hop" aria-pressed="false">🎧 Hip-Hop</button>
+            <button class="genre" data-genre="house" aria-pressed="false">🪩 House</button>
+            <button class="genre" data-genre="pop" aria-pressed="false">✦ Pop</button>
+            <button class="genre" data-genre="indie" aria-pressed="false">☀ Indie</button>
+            <button class="genre" data-genre="garage" aria-pressed="false">🎛 UK Garage</button>
+          </div>
+        </div>
+
+        <div class="panel intensity-panel">
+          <div class="panel-heading"><span>DISCOVERY LEVEL</span><span id="adventureLabel" class="mini-tag">Balanced</span></div>
+          <input id="adventure" type="range" min="0" max="100" value="50" aria-label="Discovery intensity" />
+          <div class="scale"><span>Stay familiar</span><span>Surprise me</span></div>
+        </div>
+
+        <div class="side-bottom">
+          <div class="stat-line"><span>❤️ Songs liked</span><strong id="likeCount">0</strong></div>
+          <div class="stat-line"><span>✕ Songs passed</span><strong id="skipCount">0</strong></div>
+          <button class="text-button" type="button" id="resetHistory">Reset discovery history</button>
+        </div>
+      </aside>
+
+      <section class="main-column" aria-label="Music discovery">
+        <div class="topline"><div><span class="eyebrow">NOW DISCOVERING</span><h2>For your ears only<span class="green-dot">.</span></h2></div><span class="session-tag" id="sessionTag">Start discovering</span></div>
+
+        <section class="login-gate" id="loginGate">
+          <div class="gate-symbol">♫</div>
+          <span class="eyebrow">WELCOME TO SWIPEIFY</span>
+          <h2>Good music finds you here.</h2>
+          <p>Connect your Spotify Premium account for full-length tracks, personal recommendations, and instant likes.</p>
+          <button type="button" class="spotify-button" id="loginButton"><span aria-hidden="true">◉</span> Connect with Spotify</button>
+          <p class="small-print">Uses Spotify OAuth with PKCE. No password or client secret is stored by Swipeify.</p>
+        </section>
+
+        <div class="discovery hidden" id="discovery">
+          <div class="card-stage">
+            <div class="card-back card-back-two"></div>
+            <div class="card-back card-back-one"></div>
+            <article id="trackCard" class="track-card" tabindex="0" aria-label="Current recommended track. Swipe left to skip, right to like, or up to save for later.">
+              <div class="cover-container">
+                <img id="coverImage" alt="Current album cover" draggable="false" />
+                <div class="cover-shade"></div>
+                <span class="card-corner-label">SWIPEIFY DISCOVERY <span>✧</span></span>
+                <span class="swipe-stamp stamp-nope" id="nopeStamp">NOPE ✕</span>
+                <span class="swipe-stamp stamp-like" id="likeStamp">LOVE IT ♥</span>
+                <div class="cover-footer">
+                  <span class="album-chip" id="albumChip">NEW FIND</span>
+                  <span class="play-badge" id="cardPlayBadge">♫</span>
+                </div>
+              </div>
+              <div class="song-info">
+                <div class="song-title-row"><div class="song-name-wrap"><h3 id="songTitle">Finding your next favourite…</h3><p id="songArtist">Swipeify</p></div><span class="match-tag" id="matchTag">✦ For you</span></div>
+                <div class="info-divider"></div>
+                <div class="reason-row"><span>✦</span><span id="reasonText">Based on your vibe</span></div>
+              </div>
+            </article>
+          </div>
+
+          <div class="song-actions" aria-label="Song decisions">
+            <button type="button" class="action round small undo" id="undoButton" aria-label="Undo last swipe" title="Undo last swipe">↶</button>
+            <button type="button" class="action round reject" id="skipButton" aria-label="Skip this song" title="Swipe left to skip">✕</button>
+            <button type="button" class="action round bookmark" id="bookmarkButton" aria-label="Save for later" title="Swipe up to save for later">♧</button>
+            <button type="button" class="action round like" id="likeButton" aria-label="Like this song" title="Swipe right to like">♥</button>
+            <button type="button" class="action round small super" id="superButton" aria-label="Super like" title="Super like">★</button>
+          </div>
+          <p class="gesture-hint">← pass <span>•</span> ↑ save for later <span>•</span> love →</p>
+          <div class="notice" id="feedNotice" role="status" aria-live="polite"></div>
+        </div>
+
+        <section class="loading-state hidden" id="loadingState" aria-live="polite">
+          <div class="spinner"></div><h3>Finding your sound…</h3><p id="loadingText">Searching the Spotify catalogue</p>
+        </section>
+        <section class="error-state hidden" id="errorState" role="alert">
+          <div class="error-emoji">☁</div><h3 id="errorTitle">Something went wrong</h3><p id="errorMessage">Please try again.</p>
+          <button class="secondary-button" id="retryButton" type="button">Try again ↗</button>
+        </section>
+
+        <footer class="player-bar hidden" id="playerBar">
+          <div class="player-row">
+            <div class="player-track"><img id="playerCover" alt="" /><div><strong id="playerTitle">—</strong><span id="playerArtist">—</span></div></div>
+            <div class="player-controls"><button type="button" id="playPause" aria-label="Play or pause">▶</button><button type="button" id="nextButton" aria-label="Next recommendation">⏭</button></div>
+          </div>
+          <div class="progress-row"><span id="elapsed">0:00</span><input id="seekBar" type="range" min="0" max="1000" value="0" aria-label="Song playback position" /><span id="duration">0:00</span></div>
+          <div class="player-message" id="playerMessage" role="status" aria-live="polite"></div>
+        </footer>
+      </section>
+
+      <aside class="right-sidebar">
+        <div class="right-panel">
+          <span class="eyebrow">HOW IT WORKS</span>
+          <div class="how-row"><span class="how-icon green">♥</span><div><strong>Love it?</strong><p>Swipe right. Save it straight to your Spotify Liked Songs.</p></div></div>
+          <div class="how-row"><span class="how-icon pink">✕</span><div><strong>Not your thing?</strong><p>Swipe left and move on. We'll avoid suggesting it again.</p></div></div>
+          <div class="how-row"><span class="how-icon purple">♧</span><div><strong>Not sure yet?</strong><p>Swipe up. We'll keep it in your local saved-for-later list.</p></div></div>
+        </div>
+        <div class="right-panel tip-panel"><span>THE MORE YOU SWIPE ↗</span><p>The better Swipeify gets at finding your next favourite.</p><div class="tip-stars">✧ ✦ ✧</div></div>
+        <div class="right-panel saved-panel"><div class="panel-heading"><span>SAVED FOR LATER</span><span id="savedCount">0</span></div><div id="savedList" class="saved-list"><p class="empty-saved">Nothing saved yet.</p></div></div>
+      </aside>
+    </main>
+
+    <footer class="footer"><span>Made for finding music you didn't know you needed.</span><a href="https://spotify.com" target="_blank" rel="noopener noreferrer">Powered by Spotify</a><button type="button" id="logoutButton" class="text-button hidden">Disconnect</button></footer>
+  </div>
+  <div id="toast" role="status" aria-live="polite" class="toast hidden"></div>
+  <script src="./app.js" defer></script>
+</body>
+</html>
