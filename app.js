@@ -30,7 +30,7 @@ const state = {
   queue: [], current: null, undo: null, fetching: null, swiping: false,
   topArtists: [], knownTracks: new Set(), user: null, player: null, deviceId: null,
   playback: { position: 0, duration: 0, updatedAt: 0, paused: true },
-  started: false, endHandled: false, loading: false, refreshPromise: null,
+  started: false, autoPlayNext: false, pendingPlay: false, endHandled: false, loading: false, refreshPromise: null,
   searchRound: 0, toastTimer: null, genreHint: ''
 };
 function savePreferences() {
@@ -299,6 +299,12 @@ async function loadTaste() {
     if (hit) { state.genre = hit; setGenreUI(); }
   }
 }
+function updateGestureHint() {
+  const el = $('gestureHint');
+  if (el) el.textContent = state.autoPlayNext
+    ? '← pass  •  ↑ save for later  •  love →'
+    : 'Tap ▶ or swipe a song to start listening automatically';
+}
 function renderTrack(track) {
   if (!track) return;
   state.current = track;
@@ -310,6 +316,7 @@ function renderTrack(track) {
   $('playerCover').src = track.cover; $('playerTitle').textContent = track.name; $('playerArtist').textContent = track.artist;
   $('sessionTag').textContent = state.genre.toUpperCase();
   $('feedNotice').textContent = ''; $('cardPlayBadge').textContent = '♫';
+  updateGestureHint();
   const card = $('trackCard'); card.style.transform = ''; card.style.opacity = ''; card.classList.remove('dragging');
   $('likeStamp').style.opacity = '0'; $('nopeStamp').style.opacity = '0';
   state.playback = { position: 0, duration: track.duration, updatedAt: performance.now(), paused: true };
@@ -332,7 +339,15 @@ async function advance(autoplay) {
   }
   showDiscovery();
   renderTrack(state.queue.shift());
-  if (autoplay && state.deviceId) await playCurrent().catch((e) => playerMessage(e.message));
+  if (autoplay) {
+    if (state.deviceId) {
+      await playCurrent().catch((e) => playerMessage(e.message));
+    } else {
+      // A swipe can be the first user gesture while the Spotify player is still connecting.
+      state.pendingPlay = true;
+      playerMessage('Connecting Spotify… your music will start when the player is ready.');
+    }
+  }
 }
 function playerMessage(message) { $('playerMessage').textContent = message || ''; }
 async function saveToSpotify(track) {
@@ -354,8 +369,16 @@ function recordDecision(track, action) {
 async function swipe(action) {
   if (!state.current || state.swiping) return;
   state.swiping = true;
-  // Gesture-originated activation helps mobile browsers permit continued playback.
-  if (state.player && typeof state.player.activateElement === 'function') state.player.activateElement();
+  // A deliberate swipe counts as "start listening". Activate Spotify synchronously
+  // in the gesture handler before the card animation and network requests.
+  if (action !== 'auto') {
+    state.autoPlayNext = true;
+    if (!state.deviceId) state.pendingPlay = true;
+    updateGestureHint();
+  }
+  if (state.player && typeof state.player.activateElement === 'function') {
+    void state.player.activateElement().catch(() => {});
+  }
   const track = state.current;
   state.undo = { track, action };
   const card = $('trackCard');
@@ -367,7 +390,7 @@ async function swipe(action) {
   recordDecision(track, action);
   await new Promise((resolve) => setTimeout(resolve, 210));
   state.swiping = false;
-  await advance(state.started);
+  await advance(state.autoPlayNext);
 }
 async function undoSwipe() {
   if (!state.undo || state.swiping) { showToast('Nothing to undo yet'); return; }
@@ -377,14 +400,14 @@ async function undoSwipe() {
   if (previous.action === 'bookmark') state.bookmarks = state.bookmarks.filter((item) => item.id !== previous.track.id);
   savePreferences(); updateStats();
   renderTrack(previous.track); showDiscovery();
-  if (state.started && state.deviceId) await playCurrent().catch((e) => playerMessage(e.message));
+  if (state.autoPlayNext && state.deviceId) await playCurrent().catch((e) => playerMessage(e.message));
   if (previous.action === 'like' || previous.action === 'super') showToast('Song restored. Your Spotify Liked Songs save is unchanged.');
 }
 async function changeGenre(value) {
   if (state.genre === value) return;
   state.genre = value; state.queue = []; state.searchRound = 0;
   savePreferences(); setGenreUI();
-  if (state.tokens) await advance(state.started);
+  if (state.tokens) await advance(state.autoPlayNext);
 }
 async function connectPlayer() {
   if (state.player) return;
@@ -403,7 +426,10 @@ async function connectPlayer() {
   state.player = player;
   player.addListener('ready', ({ device_id }) => {
     state.deviceId = device_id; $('playerBar').classList.remove('hidden');
-    playerMessage('Ready. Tap ▶ to start listening.');
+    playerMessage('Ready. Tap ▶ or swipe a card to start listening.');
+    if (state.pendingPlay && state.current) {
+      void playCurrent().catch((error) => playerMessage(error.message + ' Tap ▶ if your browser blocked autoplay.'));
+    }
   });
   player.addListener('not_ready', () => { state.deviceId = null; playerMessage('Player disconnected. Reconnect or reload the page.'); });
   player.addListener('player_state_changed', (playback) => {
@@ -426,7 +452,12 @@ async function connectPlayer() {
   player.addListener('authentication_error', ({ message }) => playerMessage('Spotify authentication failed: ' + message));
   player.addListener('account_error', ({ message }) => playerMessage('Spotify Premium is required: ' + message));
   player.addListener('playback_error', ({ message }) => playerMessage('Playback failed: ' + message));
-  player.addListener('autoplay_failed', () => playerMessage('Your browser blocked autoplay. Tap ▶ to continue.'));
+  player.addListener('autoplay_failed', () => {
+    state.autoPlayNext = false;
+    state.pendingPlay = false;
+    updateGestureHint();
+    playerMessage('Your browser blocked autoplay. Tap ▶ to enable listening.');
+  });
   const connected = await player.connect();
   if (!connected) throw new Error('Spotify Web Playback SDK could not connect. Try Chrome or Edge.');
 }
@@ -439,7 +470,11 @@ async function playCurrent() {
     await spotify('/me/player/play?device_id=' + encodeURIComponent(state.deviceId), {
       method: 'PUT', body: JSON.stringify({ uris: [state.current.uri], position_ms: 0 })
     });
-    state.started = true; state.endHandled = false;
+    state.started = true;
+    state.autoPlayNext = true;
+    state.pendingPlay = false;
+    state.endHandled = false;
+    updateGestureHint();
     state.playback = { position: 0, duration: state.current.duration, updatedAt: performance.now(), paused: false };
     $('playPause').textContent = '❚❚'; playerMessage('');
   } catch (error) {
@@ -455,7 +490,7 @@ function updateProgress() {
   elapsed = Math.max(0, Math.min(duration || 0, elapsed));
   $('elapsed').textContent = timecode(elapsed); $('duration').textContent = timecode(duration);
   $('seekBar').value = duration ? String(Math.round(elapsed / duration * 1000)) : '0';
-  if (!b.paused && state.started && state.current && duration > 10000 && elapsed >= duration - 250 && !state.endHandled && !state.swiping) {
+  if (!b.paused && state.autoPlayNext && state.current && duration > 10000 && elapsed >= duration - 250 && !state.endHandled && !state.swiping) {
     state.endHandled = true; void swipe('auto');
   }
 }
@@ -467,12 +502,20 @@ async function togglePlayback() {
   if (!state.current) return;
   if (!state.deviceId) { playerMessage('Waiting for Spotify Web Playback to connect…'); return; }
   // Must be invoked synchronously inside the user gesture on mobile browsers.
-  state.player.activateElement();
+  // Keep playback activation inside the user's click/tap event.
+  void state.player.activateElement().catch(() => {});
   try {
-    if (!state.started) return await playCurrent();
+    if (!state.started) {
+      state.autoPlayNext = true;
+      return await playCurrent();
+    }
     const playback = await state.player.getCurrentState();
     if (!playback || !playback.track_window || playback.track_window.current_track?.id !== state.current.id) return await playCurrent();
+    const resuming = playback.paused;
+    state.autoPlayNext = resuming;
+    updateGestureHint();
     await state.player.togglePlay();
+    playerMessage(resuming ? '' : 'Paused. Tap ▶ or swipe to resume music.');
   } catch (error) { playerMessage(error.message); }
 }
 function attachGestures() {
@@ -515,7 +558,7 @@ function attachEvents() {
   $('undoButton').addEventListener('click', undoSwipe);
   $('nextButton').addEventListener('click', () => swipe('auto'));
   $('playPause').addEventListener('click', togglePlayback);
-  $('retryButton').addEventListener('click', () => advance(state.started));
+  $('retryButton').addEventListener('click', () => advance(state.autoPlayNext));
   $('seekBar').addEventListener('change', async (event) => {
     if (!state.player || !state.started) return;
     const position = Math.round(Number(event.target.value) / 1000 * state.playback.duration);
@@ -529,7 +572,7 @@ function attachEvents() {
     if (!confirm('Clear Swipeify swipe history and local bookmarks? Spotify Liked Songs will NOT be removed.')) return;
     state.decisions = []; state.bookmarks = []; state.queue = []; state.searchRound = 0;
     savePreferences(); updateStats(); showToast('Swipeify discovery history cleared.');
-    if (state.tokens) void advance(state.started);
+    if (state.tokens) void advance(state.autoPlayNext);
   });
   document.addEventListener('keydown', (event) => {
     if (event.target instanceof HTMLInputElement || event.altKey || event.ctrlKey || event.metaKey || !state.tokens) return;
