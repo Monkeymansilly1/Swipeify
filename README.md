@@ -29,7 +29,7 @@ This is an experimental **custom recommendation engine** using Spotify Search, n
 4. Merge the Swipeify pull request into your repository's main branch.
 5. On GitHub, go to **Repository → Settings → Pages** and choose **Build and deployment → Source → GitHub Actions**.
 6. After the deployment workflow finishes, open https://monkeymansilly1.github.io/Swipeify/ and click **Connect with Spotify**.
-7. When the embedded player says **Ready**, click **▶** to enable music playback. Browsers usually need that first interaction before streaming audio.
+7. When the embedded player says **Ready**, click **▶** or **swipe a song** to start music. Afterwards, Swipeify automatically starts the next recommendation on each swipe and when a song finishes. Browsers typically require that first user gesture before unmuted audio can play.
 
 After a merge or another push to main, the included workflow redeploys automatically. You can also trigger it under **Actions → Deploy Swipeify to GitHub Pages → Run workflow**.
 
